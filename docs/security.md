@@ -1,7 +1,25 @@
 # Security-Konzept
 
 Da der Service das **gesamte Smart Home steuern** kann, ist Security
-nicht optional. Leitprinzipien:
+nicht optional.
+
+## Industriestandards
+
+Dieses Projekt orientiert sich verbindlich an:
+
+- **[OWASP ASVS][asvs] Level 2** als Mindeststandard (Authentication,
+  Session-Management, Access-Control, Input-Validation, Crypto, Logging).
+- **[CWE Top 25][cwe]** Schwachstellen-Bewusstsein in jedem Review.
+- **[OWASP Top 10][top10]** für jeden Webhook-/HTTP-Eingang.
+- **[OWASP LLM Top 10][llm]** speziell für die Intent-Engine
+  (Prompt-Injection, übermäßige Tool-Rechte, sensitive Information disclosure).
+
+[asvs]: https://owasp.org/www-project-application-security-verification-standard/
+[cwe]: https://cwe.mitre.org/top25/
+[top10]: https://owasp.org/www-project-top-ten/
+[llm]: https://owasp.org/www-project-top-10-for-large-language-model-applications/
+
+## Leitprinzipien
 
 1. **Least Privilege** — App-User im Miniserver hat nur Rechte auf
    die Geräte, die wirklich gesteuert werden sollen.
