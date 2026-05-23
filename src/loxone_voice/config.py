@@ -7,9 +7,9 @@ base reads `os.environ` directly — use `get_settings()` instead.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -31,7 +31,24 @@ class Settings(BaseSettings):
     loxone_host: str = Field(
         description="Miniserver hostname or IP, e.g. 'miniserver.local' or '192.168.1.77'.",
     )
-    loxone_port: int = Field(default=80, ge=1, le=65535)
+    loxone_port: int | None = Field(
+        default=None,
+        ge=1,
+        le=65535,
+        description="Defaults to 443 with HTTPS, 80 with HTTP.",
+    )
+    loxone_use_https: bool = Field(
+        default=True,
+        description="Use HTTPS/WSS for the Miniserver connection.",
+    )
+    loxone_verify_tls: bool = Field(
+        default=False,
+        description=(
+            "Verify the Miniserver's TLS certificate. Miniservers ship with a "
+            "self-signed cert by default, so leave this off unless you've "
+            "installed a CA-signed certificate."
+        ),
+    )
     loxone_user: str = Field(description="Loxone username for the app account.")
     loxone_password: SecretStr = Field(description="Loxone password for the app account.")
 
@@ -70,6 +87,27 @@ class Settings(BaseSettings):
                 return []
             return [int(part.strip()) for part in stripped.split(",") if part.strip()]
         return value
+
+    @model_validator(mode="after")
+    def _default_port_from_scheme(self) -> Self:
+        """Fill in `loxone_port` from the scheme if the user didn't set one."""
+        if self.loxone_port is None:
+            # Pydantic models with `frozen=False` (the default) allow attribute
+            # assignment from validators.
+            object.__setattr__(self, "loxone_port", 443 if self.loxone_use_https else 80)
+        return self
+
+    @property
+    def loxone_http_url(self) -> str:
+        """Base URL for HTTP calls to the Miniserver (e.g. ``getPublicKey``)."""
+        scheme = "https" if self.loxone_use_https else "http"
+        return f"{scheme}://{self.loxone_host}:{self.loxone_port}"
+
+    @property
+    def loxone_ws_url(self) -> str:
+        """WebSocket URL for the Miniserver's RFC 6455 endpoint."""
+        scheme = "wss" if self.loxone_use_https else "ws"
+        return f"{scheme}://{self.loxone_host}:{self.loxone_port}/ws/rfc6455"
 
 
 @lru_cache(maxsize=1)
