@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build / dist
+build/
+dist/
+*.egg
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# Logs & runtime state
+*.log
+audit.jsonl
+logs/
+data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
