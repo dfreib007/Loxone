@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from loxone_voice.config import Settings, get_settings
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture
+def loxapp3_minimal() -> dict[str, Any]:
+    """Return the parsed minimal `LoxAPP3.json` test fixture."""
+    payload = (FIXTURES_DIR / "loxapp3_minimal.json").read_text(encoding="utf-8")
+    data: dict[str, Any] = json.loads(payload)
+    return data
 
 
 @pytest.fixture
