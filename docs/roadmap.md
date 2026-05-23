@@ -19,36 +19,47 @@ Richtwerte für eine Person bei ~10 h/Woche Einsatz.
 
 ## Phase 1 — Loxone-Adapter · ~1,5 Wochen
 
-- [ ] WebSocket-Client gegen Miniserver mit Token-Authentifizierung
-- [ ] Keepalive + Reconnect-Logik
-- [ ] Strukturdatei-Parser → Normalisiertes Domain-Modell (`Room`, `Control`, `Sensor`, `Scene`)
-- [ ] Subscription auf State-Events, in-memory State-Cache
-- [ ] CLI zum Testen: `loxctl rooms`, `loxctl set <name> on`, `loxctl state <name>`
-- [ ] Unit-Tests mit gemocktem WebSocket; ein Integrationstest gegen echten Miniserver
+- [x] Strukturdatei-Parser → Normalisiertes Domain-Modell (`Room`, `Control`, `Category`, `StructureFile`)
+- [x] In-memory State-Cache (`StateStore`) mit getrennten Value- und Text-Kanälen
+- [x] Token-Auth-Crypto-Primitives (RSA-Wrapping, AES-CBC, SHA1/SHA256 HMAC, Token-Modell mit redacted repr)
+- [x] WebSocket-Binär-Header-Parser (8-Byte-Header, Microsoft-GUID-Layout, Event-Parser)
+- [x] HTTP-Discovery (`fetch_public_key` mit injizierbarem httpx-Client)
+- [x] WebSocket-Client (`LoxoneClient`) mit vollem Handshake (Keyexchange → getkey2 → gettoken → enablebinstatusupdate)
+- [x] Event-Loop dispatcht Value-/Text-Events in den `StateStore`
+- [x] Keepalive-Task alle 240 s
+- [x] Bidirektionale Slash-Boundary-Korrelation für Command-Responses, Orphan-Buffer für Out-of-Order
+- [ ] CLI zum Testen: `loxctl rooms`, `loxctl set <name> on`, `loxctl state <name>` *(verschoben, kommt mit echter Miniserver-Anbindung)*
+- [ ] Reconnect mit Exponential-Backoff *(später, eigene Schicht)*
+- [ ] Integrationstest gegen echten Miniserver *(braucht Zugang)*
 
-**Deliverable:** Programmatisch jedes Loxone-Gerät schalten + abfragen können.
+**Deliverable:** Programmatisch jedes Loxone-Gerät schalten + abfragen können. **Status: erreicht im Mock; reale Verifikation steht aus.**
 
 ## Phase 2 — Intent-Engine mit Claude · ~1 Woche
 
-- [ ] Anthropic SDK integriert (`claude-opus-4-7` als Default)
-- [ ] Tool-Schemas definiert (siehe [claude-tools.md](claude-tools.md))
-- [ ] System-Prompt-Generator: serialisiert Haus-Struktur kompakt
-- [ ] Prompt-Caching für statische Anteile aktiviert
-- [ ] Tool-Use-Loop mit Mehrfach-Iterationen, Fehler-Handling pro Tool
-- [ ] Eval-Suite: 30+ Beispiel-Prompts mit erwarteten Tool-Calls
+- [x] Tool-Framework (`Tool`, `ToolError`, Pydantic-Args-Validation, Anthropic-Schema-Export)
+- [x] Loxone-Tools: `list_rooms`, `list_controls` (filterbar), `get_state`, `set_control` (mit `requires_confirmation`)
+- [x] System-Prompt-Generator aus `StructureFile`, mit Favoriten-Sortierung und Truncation
+- [x] Prompt-Injection-Schutz im Behavioural-Prefix (User-Text als Daten)
+- [x] `IntentEngine` mit Tool-Use-Loop, Anthropic-Client als Protocol injizierbar
+- [x] Prompt-Caching auf statischer Haus-Struktur
+- [x] Fehlerbehandlung: unknown tool, validation error, handler crash → Tool-Result mit `is_error=true`
+- [x] Iteration-Cap + Conversation-Buffer-Trimming
+- [ ] Eval-Suite: 30+ Beispiel-Prompts mit erwarteten Tool-Calls *(später, Phase 2c)*
 
-**Deliverable:** „Wohnzimmerlicht aus" über Python-Funktion ausführbar.
+**Deliverable:** „Wohnzimmerlicht aus" via Python-Funktion ausführbar. **Status: erreicht (gegen Mock-Anthropic + Mock-Loxone).**
 
 ## Phase 3 — Telegram-Bot · ~1 Woche
 
-- [ ] `aiogram 3` integriert, Long-Polling
-- [ ] User-Whitelist via Env-Var
-- [ ] `/start`, `/help`, `/status` Commands
-- [ ] Text-Handler → Intent-Engine → Antwort
-- [ ] Inline-Bestätigungs-Buttons für markierte Tools (`requires_confirmation`)
-- [ ] Audit-Log JSONL
+- [x] User-Whitelist (`UserWhitelist`) mit `WhitelistViolation`
+- [x] Channel-agnostisches Gateway (`Gateway.handle_text`) mit Audit-Integration und Rate-Limiting
+- [x] Per-User-IntentEngine-Cache + `reset_user` für Konversations-Cleanup
+- [x] aiogram 3 Adapter (`TelegramGateway`) mit `/start`, `/help`, `/reset`, Text, Voice
+- [x] `build_dispatcher` registriert Handler in Prioritätsreihenfolge
+- [x] Audit-Log mit gehashter User-ID
+- [ ] Inline-Bestätigungs-Buttons für `requires_confirmation`-Tools *(Phase 3c)*
+- [ ] Echtes End-to-End-Smoke gegen Telegram *(braucht Bot-Token)*
 
-**Deliverable:** Erste echte Steuerung des Hauses per Telegram-Text-Chat.
+**Deliverable:** Erste echte Steuerung des Hauses per Telegram-Text-Chat. **Status: Code-vollständig; reale Aktivierung braucht Bot-Token + Miniserver.**
 
 ## Phase 4 — Sprach-Nachrichten · ~3–5 Tage
 
