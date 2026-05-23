@@ -1,5 +1,11 @@
 """Loxone Miniserver adapter — protocol, structure parsing, state cache."""
 
+from ._transport import (
+    InMemoryTransport,
+    TransportClosedError,
+    WebsocketsTransport,
+    WsTransport,
+)
 from .auth import (
     AuthError,
     HashAlgorithm,
@@ -13,6 +19,14 @@ from .auth import (
     generate_session_key,
     loxone_seconds_to_datetime,
     parse_miniserver_public_key,
+)
+from .client import (
+    AuthenticationError,
+    ClientError,
+    CommandResponse,
+    LoxoneClient,
+    NotConnectedError,
+    ProtocolError,
 )
 from .discovery import DiscoveryError, fetch_public_key
 from .messages import (
@@ -33,14 +47,21 @@ from .structure import StructureFileError, categorize, parse_structure_file
 __all__ = [
     "HEADER_LENGTH",
     "AuthError",
+    "AuthenticationError",
     "Category",
+    "ClientError",
+    "CommandResponse",
     "Control",
     "ControlCategory",
     "DiscoveryError",
     "HashAlgorithm",
+    "InMemoryTransport",
+    "LoxoneClient",
     "MessageError",
     "MessageHeader",
     "MessageType",
+    "NotConnectedError",
+    "ProtocolError",
     "Room",
     "SessionKey",
     "StateEntry",
@@ -49,7 +70,10 @@ __all__ = [
     "StructureFileError",
     "TextEvent",
     "Token",
+    "TransportClosedError",
     "ValueEvent",
+    "WebsocketsTransport",
+    "WsTransport",
     "categorize",
     "compute_gettoken_hash",
     "compute_password_hash",

@@ -66,6 +66,7 @@ ignore = [
     "S101",  # `assert` is the right tool in tests
     "S105",  # hardcoded password strings — fine in fixtures
     "S106",  # hardcoded password kwargs — fine in fixtures
+    "S107",  # hardcoded password defaults — fine in fixtures
 ]
 
 [tool.mypy]
