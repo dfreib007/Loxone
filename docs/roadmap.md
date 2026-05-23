@@ -5,14 +5,17 @@ Richtwerte für eine Person bei ~10 h/Woche Einsatz.
 
 ## Phase 0 — Setup & Discovery · ~1 Woche
 
-- [ ] Repo-Skelett: `pyproject.toml` (uv), `src/loxone_voice/`, `tests/`, `docker-compose.yml`
-- [ ] Linter & Format: `ruff`, `mypy`, `pre-commit`
-- [ ] CI: GitHub Actions (lint + test)
-- [ ] **Miniserver-Erkundung**: über Browser `http://<miniserver>/data/LoxAPP3.json` ziehen, Struktur sichten
-- [ ] Liste der zu steuernden Räume / Geräte als Anforderungs-Snapshot festhalten
-- [ ] Test-User in Loxone Config anlegen (mit reduzierten Rechten für die App)
+- [x] Repo-Skelett: `pyproject.toml` (uv), `src/loxone_voice/`, `tests/`, `docker-compose.yml`, `Dockerfile`
+- [x] Linter & Format: `ruff`, `mypy --strict`, `pre-commit` mit `gitleaks`
+- [x] Build-Pipeline `make build` (lint → typecheck → tests + 80 % Coverage-Gate)
+- [x] Dependency-Audit (`make audit` mit `pip-audit`)
+- [x] CI: GitHub Actions (lint + typecheck + test + audit)
+- [x] Pydantic-Settings-Konfiguration mit Secrets-Handling
+- [ ] **Miniserver-Erkundung**: über Browser `http://<miniserver>/data/LoxAPP3.json` ziehen, Struktur sichten *(braucht Zugang)*
+- [ ] Liste der zu steuernden Räume / Geräte als Anforderungs-Snapshot festhalten *(braucht User-Input)*
+- [ ] Test-User in Loxone Config anlegen mit reduzierten Rechten *(braucht User-Aktion)*
 
-**Deliverable:** Lauffähiges `make dev`, dokumentierter Geräte-Scope.
+**Deliverable:** Lauffähiges `make build`, dokumentierter Geräte-Scope.
 
 ## Phase 1 — Loxone-Adapter · ~1,5 Wochen
 
