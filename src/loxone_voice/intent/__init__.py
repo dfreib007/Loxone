@@ -2,9 +2,12 @@
 
 from .engine import (
     AnthropicMessagesClient,
+    ConfirmationCallback,
+    ConfirmationDecision,
     IntentEngine,
     IntentEngineError,
     IntentResult,
+    PendingConfirmation,
     ToolCall,
 )
 from .system_prompt import (
@@ -26,11 +29,14 @@ from .tools import (
 
 __all__ = [
     "AnthropicMessagesClient",
+    "ConfirmationCallback",
+    "ConfirmationDecision",
     "GetStateArgs",
     "IntentEngine",
     "IntentEngineError",
     "IntentResult",
     "ListControlsArgs",
+    "PendingConfirmation",
     "SetControlArgs",
     "SystemPrompt",
     "Tool",

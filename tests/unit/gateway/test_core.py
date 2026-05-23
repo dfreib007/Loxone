@@ -10,12 +10,20 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from loxone_voice.audit import AuditLog
-from loxone_voice.gateway import Gateway, GatewayEngine, UserWhitelist
-from loxone_voice.intent import IntentEngineError, IntentResult, ToolCall
+from loxone_voice.gateway import Gateway, GatewayEngine, PendingAction, UserWhitelist
+from loxone_voice.intent import (
+    ConfirmationCallback,
+    ConfirmationDecision,
+    IntentEngineError,
+    IntentResult,
+    PendingConfirmation,
+    ToolCall,
+)
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -44,8 +52,10 @@ def _intent_ok(text: str = "Erledigt.", tools: list[ToolCall] | None = None) -> 
     return IntentResult(final_text=text, tool_calls=tools or [], iterations=1)
 
 
-def _factory_returning(engine: FakeEngine) -> Callable[[int], Awaitable[GatewayEngine]]:
-    async def factory(_user_id: int) -> GatewayEngine:
+def _factory_returning(
+    engine: FakeEngine,
+) -> Callable[[int, ConfirmationCallback], Awaitable[GatewayEngine]]:
+    async def factory(_user_id: int, _on_confirm: ConfirmationCallback) -> GatewayEngine:
         return engine
 
     return factory
@@ -229,7 +239,7 @@ async def test_engine_is_reused_across_messages_from_same_user(
     engine = FakeEngine(scripted=[_intent_ok("A"), _intent_ok("B")])
     factory_calls: list[int] = []
 
-    async def factory(user_id: int) -> FakeEngine:
+    async def factory(user_id: int, _on_confirm: ConfirmationCallback) -> FakeEngine:
         factory_calls.append(user_id)
         return engine
 
@@ -248,7 +258,7 @@ async def test_reset_user_drops_cached_engine(whitelist: UserWhitelist, audit: A
     engines: list[FakeEngine] = []
     factory_calls: list[int] = []
 
-    async def factory(user_id: int) -> FakeEngine:
+    async def factory(user_id: int, _on_confirm: ConfirmationCallback) -> FakeEngine:
         eng = FakeEngine(scripted=[_intent_ok("hi")])
         engines.append(eng)
         factory_calls.append(user_id)
@@ -307,7 +317,7 @@ async def test_rate_limit_disabled_when_zero(whitelist: UserWhitelist, audit: Au
 async def test_rate_limit_is_per_user(whitelist: UserWhitelist, audit: AuditLog) -> None:
     """User A hitting the limit shouldn't block user B."""
 
-    async def factory(user_id: int) -> FakeEngine:
+    async def factory(user_id: int, _on_confirm: ConfirmationCallback) -> FakeEngine:
         return FakeEngine(scripted=[_intent_ok("ok")] * 20)
 
     gateway = Gateway(
@@ -323,3 +333,207 @@ async def test_rate_limit_is_per_user(whitelist: UserWhitelist, audit: AuditLog)
     # User 99 is still fresh.
     response = await gateway.handle_text(user_id=99, text="hi")
     assert not response.is_error
+
+
+# ---------------------------------------------------------------------------
+# Confirmation flow
+# ---------------------------------------------------------------------------
+
+
+def _intent_with_pending(
+    text: str = "Ich werde 2 Fenster öffnen. Bitte bestätige.",
+    pending: list[PendingConfirmation] | None = None,
+) -> IntentResult:
+    return IntentResult(
+        final_text=text,
+        tool_calls=[],
+        iterations=1,
+        pending_confirmations=pending
+        or [
+            PendingConfirmation(
+                tool_name="set_control",
+                tool_arguments={"control_id": "abc", "command": "On"},
+                summary="Fenster öffnen",
+            )
+        ],
+    )
+
+
+async def test_handle_text_surfaces_pending_actions(
+    whitelist: UserWhitelist, audit: AuditLog
+) -> None:
+    engine = FakeEngine(scripted=[_intent_with_pending()])
+    gateway = Gateway(
+        whitelist=whitelist,
+        engine_factory=_factory_returning(engine),
+        audit=audit,
+        channel="telegram",
+    )
+    response = await gateway.handle_text(user_id=42, text="alle Fenster auf")
+    assert not response.is_error
+    assert response.pending_actions
+    assert response.pending_actions[0].tool_name == "set_control"
+    assert response.pending_actions[0].summary == "Fenster öffnen"
+    # action_id is a stable short hash.
+    assert len(response.pending_actions[0].action_id) == 16
+
+
+async def test_confirm_action_runs_engine_again_with_approval_prompt(
+    whitelist: UserWhitelist, audit: AuditLog
+) -> None:
+    engine = FakeEngine(
+        scripted=[_intent_with_pending(), _intent_ok("Erledigt: 1 Fenster geöffnet.")]
+    )
+    gateway = Gateway(
+        whitelist=whitelist,
+        engine_factory=_factory_returning(engine),
+        audit=audit,
+        channel="telegram",
+    )
+    first = await gateway.handle_text(user_id=42, text="Fenster auf")
+    action_id = first.pending_actions[0].action_id
+
+    second = await gateway.confirm_action(user_id=42, action_ids=[action_id], approved=True)
+    assert not second.is_error
+    assert second.text == "Erledigt: 1 Fenster geöffnet."
+    assert engine.calls[1].startswith("BENUTZER HAT BESTÄTIGT")
+
+
+async def test_confirm_action_with_deny_uses_denial_prompt(
+    whitelist: UserWhitelist, audit: AuditLog
+) -> None:
+    engine = FakeEngine(scripted=[_intent_with_pending(), _intent_ok("Abgebrochen.")])
+    gateway = Gateway(
+        whitelist=whitelist,
+        engine_factory=_factory_returning(engine),
+        audit=audit,
+        channel="telegram",
+    )
+    first = await gateway.handle_text(user_id=42, text="Fenster auf")
+    action_id = first.pending_actions[0].action_id
+
+    second = await gateway.confirm_action(user_id=42, action_ids=[action_id], approved=False)
+    assert second.text == "Abgebrochen."
+    assert engine.calls[1].startswith("BENUTZER HAT ABGELEHNT")
+
+
+async def test_confirm_action_with_unknown_id_returns_error(
+    whitelist: UserWhitelist, audit: AuditLog
+) -> None:
+    engine = FakeEngine(scripted=[_intent_ok("ok")])
+    gateway = Gateway(
+        whitelist=whitelist,
+        engine_factory=_factory_returning(engine),
+        audit=audit,
+        channel="telegram",
+    )
+    await gateway.handle_text(user_id=42, text="hi")
+
+    response = await gateway.confirm_action(
+        user_id=42, action_ids=["does-not-exist"], approved=True
+    )
+    assert response.is_error
+    assert "abgelaufen" in response.text or "offen" in response.text
+
+
+async def test_confirm_action_clears_pending_after_use(
+    whitelist: UserWhitelist, audit: AuditLog
+) -> None:
+    engine = FakeEngine(scripted=[_intent_with_pending(), _intent_ok("done")])
+    gateway = Gateway(
+        whitelist=whitelist,
+        engine_factory=_factory_returning(engine),
+        audit=audit,
+        channel="telegram",
+    )
+    first = await gateway.handle_text(user_id=42, text="Fenster auf")
+    action_id = first.pending_actions[0].action_id
+
+    await gateway.confirm_action(user_id=42, action_ids=[action_id], approved=True)
+    # Same action id should now be unknown.
+    second = await gateway.confirm_action(user_id=42, action_ids=[action_id], approved=True)
+    assert second.is_error
+
+
+async def test_confirm_action_rejects_non_whitelisted_user(
+    whitelist: UserWhitelist, audit: AuditLog
+) -> None:
+    engine = FakeEngine(scripted=[])
+    gateway = Gateway(
+        whitelist=whitelist,
+        engine_factory=_factory_returning(engine),
+        audit=audit,
+        channel="telegram",
+    )
+    response = await gateway.confirm_action(user_id=9999, action_ids=["whatever"], approved=True)
+    assert response.is_error
+    assert "freigeschaltet" in response.text
+
+
+async def test_engine_factory_receives_confirmation_callback(
+    whitelist: UserWhitelist, audit: AuditLog
+) -> None:
+    """The gateway must wire the per-user gate's `decide` into each engine."""
+    captured: list[ConfirmationCallback] = []
+
+    async def factory(_user_id: int, on_confirm: ConfirmationCallback) -> GatewayEngine:
+        captured.append(on_confirm)
+        return FakeEngine(scripted=[_intent_ok("ok")])
+
+    gateway = Gateway(
+        whitelist=whitelist,
+        engine_factory=factory,
+        audit=audit,
+        channel="telegram",
+    )
+    await gateway.handle_text(user_id=42, text="hi")
+    assert len(captured) == 1
+    # And the callback should actually be a coroutine function.
+    decision = await captured[0]("set_control", {"control_id": "x", "command": "On"})
+    # Empty gate hasn't been pre-approved, so any requires_confirmation tool defers.
+    assert decision is ConfirmationDecision.DEFER
+
+
+def test_pending_action_id_is_deterministic() -> None:
+    a = PendingAction(
+        tool_name="set_control",
+        tool_arguments={"control_id": "x", "command": "On"},
+        summary="x",
+    )
+    b = PendingAction(
+        tool_name="set_control",
+        tool_arguments={"command": "On", "control_id": "x"},  # reordered
+        summary="different summary",  # summary not part of id
+    )
+    assert a.action_id == b.action_id
+
+
+def test_pending_action_id_differs_for_different_args() -> None:
+    a = PendingAction(
+        tool_name="set_control",
+        tool_arguments={"control_id": "x", "command": "On"},
+        summary="x",
+    )
+    b = PendingAction(
+        tool_name="set_control",
+        tool_arguments={"control_id": "y", "command": "On"},
+        summary="x",
+    )
+    assert a.action_id != b.action_id
+
+
+def test_pending_action_from_engine_carries_summary() -> None:
+    """The from_engine helper preserves the summary text the engine produced."""
+    pa: PendingConfirmation = PendingConfirmation(
+        tool_name="set_control",
+        tool_arguments={"control_id": "x", "command": "Off"},
+        summary="Lampe ausschalten",
+    )
+    snapshot = PendingAction.from_engine(pa)
+    assert snapshot.summary == "Lampe ausschalten"
+    assert snapshot.tool_arguments == {"control_id": "x", "command": "Off"}
+
+
+# Suppress unused-import warning while keeping the symbols available for the
+# new confirmation tests above.
+_ = (Any,)

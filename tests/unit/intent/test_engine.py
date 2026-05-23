@@ -14,6 +14,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from loxone_voice.intent import (
+    ConfirmationDecision,
     IntentEngine,
     IntentEngineError,
     SystemPrompt,
@@ -116,6 +117,22 @@ def _make_broken_tool() -> Tool:
         description="Always raises.",
         args_model=_PingArgs,
         handler=handler,
+    )
+
+
+def _make_destructive_tool(*, executed: list[bool]) -> Tool:
+    """A `requires_confirmation` tool that records when (if) it ran."""
+
+    async def handler(_: dict[str, Any]) -> dict[str, bool]:
+        executed.append(True)
+        return {"executed": True}
+
+    return Tool(
+        name="destructive",
+        description="Destructive — needs confirmation.",
+        args_model=_PingArgs,
+        handler=handler,
+        requires_confirmation=True,
     )
 
 
@@ -389,3 +406,151 @@ async def test_tool_result_appended_to_buffer_with_correct_id(
     assert block["type"] == "tool_result"
     assert block["tool_use_id"] == "tu_42"
     assert block["is_error"] is False
+
+
+# ---------------------------------------------------------------------------
+# Confirmation gate integration
+# ---------------------------------------------------------------------------
+
+
+async def test_deferred_tool_is_not_executed(system_prompt: SystemPrompt) -> None:
+    executed: list[bool] = []
+    client = FakeAnthropic.with_script(
+        _FakeResponse(
+            content=[_FakeToolUse(id="tu_1", name="destructive", input={})],
+            stop_reason="tool_use",
+        ),
+        _FakeResponse(
+            content=[_FakeText("Ich werde das tun. Bitte bestätige.")],
+            stop_reason="end_turn",
+        ),
+    )
+
+    async def on_confirm(_name: str, _args: dict[str, Any]) -> ConfirmationDecision:
+        return ConfirmationDecision.DEFER
+
+    engine = IntentEngine(
+        client=client,
+        model="m",
+        tools=[_make_destructive_tool(executed=executed)],
+        system_prompt=system_prompt,
+        on_confirm=on_confirm,
+    )
+    result = await engine.run("mach was Großes")
+
+    assert executed == []  # handler must not have run
+    assert len(result.pending_confirmations) == 1
+    assert result.pending_confirmations[0].tool_name == "destructive"
+    # Claude saw a PENDING_USER_CONFIRMATION tool result.
+    assert "PENDING_USER_CONFIRMATION" in result.tool_calls[0].result
+
+
+async def test_approved_tool_executes_normally(system_prompt: SystemPrompt) -> None:
+    executed: list[bool] = []
+    client = FakeAnthropic.with_script(
+        _FakeResponse(
+            content=[_FakeToolUse(id="tu_1", name="destructive", input={})],
+            stop_reason="tool_use",
+        ),
+        _FakeResponse(content=[_FakeText("Erledigt.")], stop_reason="end_turn"),
+    )
+
+    async def on_confirm(_name: str, _args: dict[str, Any]) -> ConfirmationDecision:
+        return ConfirmationDecision.APPROVE
+
+    engine = IntentEngine(
+        client=client,
+        model="m",
+        tools=[_make_destructive_tool(executed=executed)],
+        system_prompt=system_prompt,
+        on_confirm=on_confirm,
+    )
+    result = await engine.run("BESTÄTIGT")
+
+    assert executed == [True]
+    assert result.pending_confirmations == []
+    assert result.tool_calls[0].is_error is False
+
+
+async def test_denied_tool_returns_error_to_claude(system_prompt: SystemPrompt) -> None:
+    executed: list[bool] = []
+    client = FakeAnthropic.with_script(
+        _FakeResponse(
+            content=[_FakeToolUse(id="tu_1", name="destructive", input={})],
+            stop_reason="tool_use",
+        ),
+        _FakeResponse(content=[_FakeText("Abgebrochen.")], stop_reason="end_turn"),
+    )
+
+    async def on_confirm(_name: str, _args: dict[str, Any]) -> ConfirmationDecision:
+        return ConfirmationDecision.DENY
+
+    engine = IntentEngine(
+        client=client,
+        model="m",
+        tools=[_make_destructive_tool(executed=executed)],
+        system_prompt=system_prompt,
+        on_confirm=on_confirm,
+    )
+    result = await engine.run("ABGELEHNT")
+
+    assert executed == []
+    assert result.tool_calls[0].is_error is True
+    assert "USER_DENIED" in result.tool_calls[0].result
+
+
+async def test_callback_not_invoked_for_normal_tools(system_prompt: SystemPrompt) -> None:
+    """A tool without `requires_confirmation` must not trigger the callback."""
+    calls: list[str] = []
+
+    async def on_confirm(name: str, _args: dict[str, Any]) -> ConfirmationDecision:
+        calls.append(name)
+        return ConfirmationDecision.DENY  # would block if invoked
+
+    client = FakeAnthropic.with_script(
+        _FakeResponse(
+            content=[_FakeToolUse(id="tu_1", name="ping", input={})],
+            stop_reason="tool_use",
+        ),
+        _FakeResponse(content=[_FakeText("Pong.")], stop_reason="end_turn"),
+    )
+    engine = IntentEngine(
+        client=client,
+        model="m",
+        tools=[_make_ping_tool()],
+        system_prompt=system_prompt,
+        on_confirm=on_confirm,
+    )
+    result = await engine.run("ping bitte")
+    assert calls == []
+    assert result.tool_calls[0].is_error is False
+
+
+async def test_pending_confirmations_cleared_between_turns(
+    system_prompt: SystemPrompt,
+) -> None:
+    """A new turn should not inherit the previous turn's pending list."""
+    executed: list[bool] = []
+
+    async def on_confirm(_name: str, _args: dict[str, Any]) -> ConfirmationDecision:
+        return ConfirmationDecision.DEFER
+
+    client = FakeAnthropic.with_script(
+        _FakeResponse(
+            content=[_FakeToolUse(id="tu_1", name="destructive", input={})],
+            stop_reason="tool_use",
+        ),
+        _FakeResponse(content=[_FakeText("Bitte bestätige.")], stop_reason="end_turn"),
+        _FakeResponse(content=[_FakeText("Hi.")], stop_reason="end_turn"),
+    )
+    engine = IntentEngine(
+        client=client,
+        model="m",
+        tools=[_make_destructive_tool(executed=executed)],
+        system_prompt=system_prompt,
+        on_confirm=on_confirm,
+    )
+    first = await engine.run("destruktiv")
+    second = await engine.run("nur Hallo")
+    assert len(first.pending_confirmations) == 1
+    assert second.pending_confirmations == []

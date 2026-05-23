@@ -19,8 +19,9 @@ balloon context.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from .system_prompt import SystemPrompt
@@ -35,6 +36,26 @@ class IntentEngineError(RuntimeError):
     Includes hitting the tool-use iteration cap with no final answer
     and unrecoverable upstream errors from Claude.
     """
+
+
+class ConfirmationDecision(StrEnum):
+    """Outcome of asking the confirmation callback about a tool call."""
+
+    APPROVE = "approve"  # execute the tool normally
+    DENY = "deny"  # user said no — don't execute, tell Claude
+    DEFER = "defer"  # ask the user — don't execute *yet*
+
+
+ConfirmationCallback = Callable[[str, dict[str, Any]], Awaitable[ConfirmationDecision]]
+
+
+@dataclass(frozen=True, slots=True)
+class PendingConfirmation:
+    """A tool call the engine declined to run pending user confirmation."""
+
+    tool_name: str
+    tool_arguments: dict[str, Any]
+    summary: str
 
 
 # ---------------------------------------------------------------------------
@@ -89,11 +110,18 @@ class ToolCall:
 
 @dataclass(frozen=True, slots=True)
 class IntentResult:
-    """Outcome of a single :meth:`IntentEngine.run` call."""
+    """Outcome of a single :meth:`IntentEngine.run` call.
+
+    ``pending_confirmations`` is non-empty when at least one
+    ``requires_confirmation`` tool was deferred during this turn. The
+    gateway is expected to surface a yes/no prompt to the user and call
+    back into the engine once a decision arrives.
+    """
 
     final_text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     iterations: int = 1
+    pending_confirmations: list[PendingConfirmation] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +150,7 @@ class IntentEngine:
         max_tool_iterations: int = _DEFAULT_MAX_ITERATIONS,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
         max_buffer_messages: int = _DEFAULT_MAX_BUFFER_MESSAGES,
+        on_confirm: ConfirmationCallback | None = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -131,7 +160,9 @@ class IntentEngine:
         self._max_tool_iterations = max_tool_iterations
         self._max_tokens = max_tokens
         self._max_buffer_messages = max_buffer_messages
+        self._on_confirm = on_confirm
         self._buffer: list[dict[str, Any]] = []
+        self._pending_in_turn: list[PendingConfirmation] = []
 
     # ---- Public ------------------------------------------------------------
 
@@ -147,6 +178,7 @@ class IntentEngine:
     async def run(self, user_message: str) -> IntentResult:
         """Execute one user turn end-to-end and return the final text."""
         self._buffer.append({"role": "user", "content": user_message})
+        self._pending_in_turn = []
         tool_calls: list[ToolCall] = []
 
         for iteration in range(1, self._max_tool_iterations + 1):
@@ -167,6 +199,7 @@ class IntentEngine:
                     final_text=_extract_text(response.content),
                     tool_calls=tool_calls,
                     iterations=iteration,
+                    pending_confirmations=list(self._pending_in_turn),
                 )
 
             tool_results: list[dict[str, Any]] = []
@@ -201,6 +234,37 @@ class IntentEngine:
                 result=f"unknown tool: {name!r}",
                 is_error=True,
             )
+
+        if tool.requires_confirmation and self._on_confirm is not None:
+            decision = await self._on_confirm(name, raw_args)
+            if decision is ConfirmationDecision.DEFER:
+                self._pending_in_turn.append(
+                    PendingConfirmation(
+                        tool_name=name,
+                        tool_arguments=raw_args,
+                        summary=_describe_pending(name, raw_args),
+                    )
+                )
+                return ToolCall(
+                    name=name,
+                    arguments=raw_args,
+                    result=(
+                        "PENDING_USER_CONFIRMATION: the action was NOT executed. "
+                        "Stop and describe to the user what you plan to do. "
+                        "The user will see Yes/No buttons; do not retry this tool "
+                        "in this turn."
+                    ),
+                    is_error=False,
+                )
+            if decision is ConfirmationDecision.DENY:
+                return ToolCall(
+                    name=name,
+                    arguments=raw_args,
+                    result="USER_DENIED: action was not executed.",
+                    is_error=True,
+                )
+            # APPROVE falls through to normal execution.
+
         try:
             result = await tool.invoke(raw_args)
         except ToolError as exc:
@@ -284,3 +348,16 @@ def _extract_text(blocks: Iterable[Any]) -> str:
         elif isinstance(block, dict) and block.get("type") == "text":
             parts.append(str(block.get("text", "")))
     return "\n".join(p for p in parts if p).strip()
+
+
+def _describe_pending(tool_name: str, raw_args: dict[str, Any]) -> str:
+    """Render a deferred tool call into a one-line human description.
+
+    Used in the gateway's confirmation prompt. We deliberately don't
+    pull in dependency-specific formatting here so the engine remains
+    agnostic of which channel is showing the prompt.
+    """
+    if not raw_args:
+        return tool_name
+    parts = ", ".join(f"{k}={v!r}" for k, v in raw_args.items())
+    return f"{tool_name}({parts})"

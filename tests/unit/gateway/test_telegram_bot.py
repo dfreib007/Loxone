@@ -63,7 +63,7 @@ def gateway(tmp_path: Path) -> Gateway:
         scripted=[IntentResult(final_text="Erledigt.", tool_calls=[], iterations=1)] * 20
     )
 
-    async def factory(_user_id: int) -> GatewayEngine:
+    async def factory(_user_id: int, _on_confirm: object) -> GatewayEngine:
         return engine
 
     return Gateway(
