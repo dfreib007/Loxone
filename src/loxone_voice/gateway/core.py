@@ -169,6 +169,15 @@ class Gateway:
         audit_input = f"[confirm approved={approved} actions={','.join(known_ids)}]"
         return await self._run_turn(user_id=user_id, prompt=prompt, audit_input=audit_input)
 
+    def pending_action_ids(self, user_id: int) -> list[str]:
+        """Return the action ids currently awaiting a confirmation from ``user_id``.
+
+        Used by channel layers (Telegram callback handler) when the user
+        clicks a yes/no button: the click itself carries only ``yes`` or
+        ``no``, and the channel asks the gateway which actions it refers to.
+        """
+        return list(self._pending_actions.get(user_id, {}).keys())
+
     def reset_user(self, user_id: int) -> None:
         """Drop a user's conversation history and pending state."""
         self._engines.pop(user_id, None)

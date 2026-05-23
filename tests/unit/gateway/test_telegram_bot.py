@@ -24,7 +24,7 @@ from loxone_voice.gateway import (
     UserWhitelist,
     build_dispatcher,
 )
-from loxone_voice.intent import IntentResult
+from loxone_voice.intent import IntentResult, PendingConfirmation
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -43,9 +43,24 @@ class FakeMessage:
     from_user: FakeUser | None
     text: str | None = None
     answers: list[str] = field(default_factory=list)
+    last_reply_markup: Any | None = None
 
-    async def answer(self, text: str) -> None:
+    async def answer(self, text: str, reply_markup: Any | None = None) -> None:
         self.answers.append(text)
+        self.last_reply_markup = reply_markup
+
+
+@dataclass
+class FakeCallbackQuery:
+    """Mimics aiogram.types.CallbackQuery: data + message + from_user + answer."""
+
+    from_user: FakeUser
+    data: str
+    message: FakeMessage
+    acks: list[str] = field(default_factory=list)
+
+    async def answer(self, text: str = "") -> None:
+        self.acks.append(text)
 
 
 @dataclass
@@ -185,3 +200,127 @@ async def test_handler_tolerates_object_without_answer_method(
     no_answer: Any = NoAnswerMessage()
     # Must not raise.
     await telegram.on_text(no_answer)
+
+
+# ---------------------------------------------------------------------------
+# Confirmation inline buttons
+# ---------------------------------------------------------------------------
+
+
+def _make_gateway_with(tmp_path: Path, *scripted: IntentResult) -> Gateway:
+    engine = FakeEngine(scripted=list(scripted))
+
+    async def factory(_user_id: int, _on_confirm: object) -> GatewayEngine:
+        return engine
+
+    return Gateway(
+        whitelist=UserWhitelist.from_iterable([42]),
+        engine_factory=factory,
+        audit=AuditLog(tmp_path / "audit.jsonl"),
+        channel="telegram",
+        rate_limit_per_minute=0,
+    )
+
+
+def _result_with_pending(text: str = "Bitte bestätige.") -> IntentResult:
+    return IntentResult(
+        final_text=text,
+        tool_calls=[],
+        iterations=1,
+        pending_confirmations=[
+            PendingConfirmation(
+                tool_name="set_control",
+                tool_arguments={"control_id": "abc", "command": "On"},
+                summary="Fenster öffnen",
+            )
+        ],
+    )
+
+
+def _plain(text: str = "Erledigt.") -> IntentResult:
+    return IntentResult(final_text=text, tool_calls=[], iterations=1)
+
+
+async def test_text_handler_attaches_inline_keyboard_when_pending(tmp_path: Path) -> None:
+    gateway = _make_gateway_with(tmp_path, _result_with_pending())
+    telegram = TelegramGateway(gateway)
+    msg = FakeMessage(from_user=FakeUser(id=42), text="alle Fenster auf")
+
+    await telegram.on_text(msg)
+
+    assert msg.last_reply_markup is not None
+    # The keyboard exposes two buttons (Yes, No) with the documented callback_data.
+    buttons = [btn for row in msg.last_reply_markup.inline_keyboard for btn in row]
+    callback_data = {btn.callback_data for btn in buttons}
+    assert callback_data == {"cnf:y", "cnf:n"}
+
+
+async def test_text_handler_omits_keyboard_when_no_pending(tmp_path: Path) -> None:
+    gateway = _make_gateway_with(tmp_path, _plain("Hi."))
+    telegram = TelegramGateway(gateway)
+    msg = FakeMessage(from_user=FakeUser(id=42), text="hallo")
+    await telegram.on_text(msg)
+    assert msg.last_reply_markup is None
+
+
+async def test_callback_yes_executes_via_confirm_action(tmp_path: Path) -> None:
+    gateway = _make_gateway_with(tmp_path, _result_with_pending(), _plain("Erledigt."))
+    telegram = TelegramGateway(gateway)
+
+    # Prime the pending action.
+    prompt_msg = FakeMessage(from_user=FakeUser(id=42), text="Fenster auf")
+    await telegram.on_text(prompt_msg)
+
+    # User clicks Yes.
+    reply_msg = FakeMessage(from_user=FakeUser(id=42))
+    callback = FakeCallbackQuery(from_user=FakeUser(id=42), data="cnf:y", message=reply_msg)
+    await telegram.on_confirmation_callback(callback)
+
+    assert reply_msg.answers == ["Erledigt."]
+    assert callback.acks == [""]  # spinner ack with no toast text
+
+
+async def test_callback_no_uses_denied_path(tmp_path: Path) -> None:
+    gateway = _make_gateway_with(tmp_path, _result_with_pending(), _plain("Abgebrochen."))
+    telegram = TelegramGateway(gateway)
+
+    prompt_msg = FakeMessage(from_user=FakeUser(id=42), text="Fenster auf")
+    await telegram.on_text(prompt_msg)
+
+    reply_msg = FakeMessage(from_user=FakeUser(id=42))
+    callback = FakeCallbackQuery(from_user=FakeUser(id=42), data="cnf:n", message=reply_msg)
+    await telegram.on_confirmation_callback(callback)
+    assert reply_msg.answers == ["Abgebrochen."]
+
+
+async def test_callback_with_no_pending_returns_friendly_message(tmp_path: Path) -> None:
+    gateway = _make_gateway_with(tmp_path)  # nothing scripted
+    telegram = TelegramGateway(gateway)
+    reply_msg = FakeMessage(from_user=FakeUser(id=42))
+    callback = FakeCallbackQuery(from_user=FakeUser(id=42), data="cnf:y", message=reply_msg)
+    await telegram.on_confirmation_callback(callback)
+    assert any("offene Aktion" in a for a in reply_msg.answers)
+    assert callback.acks == [
+        "Keine offene Aktion mehr (eventuell schon bestätigt oder abgelaufen)."
+    ]
+
+
+async def test_callback_with_unknown_data_silently_acks(tmp_path: Path) -> None:
+    """Defensive: a stray callback with unexpected data must not crash."""
+    gateway = _make_gateway_with(tmp_path)
+    telegram = TelegramGateway(gateway)
+    callback = FakeCallbackQuery(
+        from_user=FakeUser(id=42),
+        data="some-other-prefix",
+        message=FakeMessage(from_user=FakeUser(id=42)),
+    )
+    await telegram.on_confirmation_callback(callback)
+    # Just an empty ack — no message answer.
+    assert callback.acks == [""]
+
+
+def test_dispatcher_registers_callback_handler(tmp_path: Path) -> None:
+    gateway = _make_gateway_with(tmp_path)
+    telegram = TelegramGateway(gateway)
+    dp = build_dispatcher(telegram)
+    assert dp.callback_query.handlers, "callback_query handler must be registered"
