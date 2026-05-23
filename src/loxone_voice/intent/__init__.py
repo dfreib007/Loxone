@@ -1,5 +1,12 @@
 """Intent engine: turns natural-language requests into Loxone tool calls."""
 
+from .engine import (
+    AnthropicMessagesClient,
+    IntentEngine,
+    IntentEngineError,
+    IntentResult,
+    ToolCall,
+)
 from .system_prompt import (
     SystemPrompt,
     build_system_prompt,
@@ -18,11 +25,16 @@ from .tools import (
 )
 
 __all__ = [
+    "AnthropicMessagesClient",
     "GetStateArgs",
+    "IntentEngine",
+    "IntentEngineError",
+    "IntentResult",
     "ListControlsArgs",
     "SetControlArgs",
     "SystemPrompt",
     "Tool",
+    "ToolCall",
     "ToolError",
     "ToolHandler",
     "build_default_toolset",
