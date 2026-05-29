@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Callable
 import httpx
 import pytest
 
-from loxone_voice.adapter import DiscoveryError, fetch_public_key
+from loxone_voice.adapter import DiscoveryError, fetch_public_key, fetch_structure_file
 
 # An example PEM the Miniserver returns — content doesn't matter for the
 # transport tests, the bytes are just round-tripped.
@@ -165,3 +165,68 @@ async def test_fetch_public_key_rejects_non_dict_payload(
     client = make_client(httpx.MockTransport(handler))
     with pytest.raises(DiscoveryError, match="LL"):
         await fetch_public_key(client, base_url="http://miniserver.test")
+
+
+# ---------------------------------------------------------------------------
+# fetch_structure_file
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_structure_file_returns_parsed_payload(
+    make_client: Callable[[httpx.MockTransport], httpx.AsyncClient],
+) -> None:
+    received: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(200, json={"msInfo": {"msName": "Test"}, "controls": {}, "rooms": {}})
+
+    client = make_client(httpx.MockTransport(handler))
+    payload = await fetch_structure_file(
+        client,
+        base_url="https://miniserver.test",
+        user="voice-app",
+        password="pw",
+    )
+    assert payload["msInfo"]["msName"] == "Test"
+    assert received[0].url.path == "/data/LoxAPP3.json"
+    assert received[0].headers.get("Authorization", "").startswith("Basic ")
+
+
+async def test_fetch_structure_file_raises_on_unauthorized(
+    make_client: Callable[[httpx.MockTransport], httpx.AsyncClient],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="unauthorized")
+
+    client = make_client(httpx.MockTransport(handler))
+    with pytest.raises(httpx.HTTPStatusError):
+        await fetch_structure_file(
+            client, base_url="https://miniserver.test", user="x", password="y"
+        )
+
+
+async def test_fetch_structure_file_rejects_non_object_body(
+    make_client: Callable[[httpx.MockTransport], httpx.AsyncClient],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=["unexpected"])
+
+    client = make_client(httpx.MockTransport(handler))
+    with pytest.raises(DiscoveryError, match="not a JSON object"):
+        await fetch_structure_file(
+            client, base_url="https://miniserver.test", user="x", password="y"
+        )
+
+
+async def test_fetch_structure_file_strips_trailing_slash(
+    make_client: Callable[[httpx.MockTransport], httpx.AsyncClient],
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"controls": {}})
+
+    client = make_client(httpx.MockTransport(handler))
+    payload = await fetch_structure_file(
+        client, base_url="https://miniserver.test/", user="x", password="y"
+    )
+    assert payload == {"controls": {}}

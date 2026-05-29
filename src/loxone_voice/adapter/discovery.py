@@ -1,8 +1,8 @@
 """HTTP discovery helpers for the Loxone Miniserver.
 
-A handful of endpoints (``/jdev/sys/getPublicKey`` in particular) need
-to be reachable *before* the encrypted WebSocket session exists. We use
-plain HTTP for them.
+A handful of endpoints (``/jdev/sys/getPublicKey``, ``/data/LoxAPP3.json``)
+need to be reachable for *initial* discovery. We use plain HTTP/HTTPS
+for them.
 
 These helpers take an :class:`httpx.AsyncClient` injected by the caller
 so tests can supply :class:`httpx.MockTransport` without monkey-patching.
@@ -36,6 +36,36 @@ async def fetch_public_key(client: httpx.AsyncClient, *, base_url: str) -> str:
     response.raise_for_status()
     payload = response.json()
     return _extract_ll_value(payload, control_hint="getPublicKey")
+
+
+async def fetch_structure_file(
+    client: httpx.AsyncClient,
+    *,
+    base_url: str,
+    user: str,
+    password: str,
+) -> dict[str, Any]:
+    """Fetch and JSON-decode the Miniserver's ``LoxAPP3.json``.
+
+    Uses HTTP Basic Auth, which works on every Loxone firmware shipped
+    so far. The caller passes the structure dict through
+    :func:`loxone_voice.adapter.structure.parse_structure_file` to get a
+    typed :class:`StructureFile`.
+
+    Raises:
+        httpx.HTTPStatusError: if the Miniserver rejects the credentials
+            (401/403) or is otherwise unreachable.
+        DiscoveryError: if the response body is not a JSON object.
+    """
+    response = await client.get(
+        f"{base_url.rstrip('/')}/data/LoxAPP3.json",
+        auth=httpx.BasicAuth(user, password),
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise DiscoveryError("structure file response is not a JSON object")
+    return payload
 
 
 def _extract_ll_value(payload: Any, *, control_hint: str) -> str:

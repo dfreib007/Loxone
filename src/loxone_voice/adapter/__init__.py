@@ -28,7 +28,7 @@ from .client import (
     NotConnectedError,
     ProtocolError,
 )
-from .discovery import DiscoveryError, fetch_public_key
+from .discovery import DiscoveryError, fetch_public_key, fetch_structure_file
 from .messages import (
     HEADER_LENGTH,
     MessageError,
@@ -81,6 +81,7 @@ __all__ = [
     "encrypt_command",
     "encrypt_session_key_for_miniserver",
     "fetch_public_key",
+    "fetch_structure_file",
     "format_loxone_uuid",
     "generate_session_key",
     "loxone_seconds_to_datetime",
