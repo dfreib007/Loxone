@@ -22,6 +22,39 @@ Keine eingehenden Ports nötig — Telegram-Updates kommen per Long-Polling
 **outbound** vom Pi, Anthropic & der Miniserver werden ebenfalls
 outbound erreicht.
 
+## Schnellstart (ein Befehl)
+
+Voraussetzung: `voice-app`-User in Loxone Config angelegt (siehe
+Abschnitt 1 unten), Telegram-Bot beim `@BotFather` registriert
+(Abschnitt 2), Anthropic-Key in der Hand (Abschnitt 3).
+
+Dann auf dem Pi per SSH:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dfreib007/Loxone/claude/loxone-voice-control-WNWBH/scripts/setup-pi.sh | bash
+```
+
+Das Script:
+
+1. Installiert Docker + Compose, falls noch nicht da
+2. Klont das Repo nach `~/loxone-voice`
+3. Fragt deine Secrets **interaktiv** ab (Passwörter mit verstecktem Input)
+4. Schreibt `.env` mit `chmod 600`
+5. Startet den Container und prüft, ob der Miniserver-Handshake durchläuft
+
+Bei Erfolg siehst du am Ende „Miniserver handshake succeeded". Wenn
+nicht, druckt das Script die letzten 40 Log-Zeilen und zeigt die
+häufigsten Fixe.
+
+**Erneuter Lauf des Scripts** = Update: es zieht den neuesten Code und
+startet den Container neu, lässt die `.env` aber in Ruhe (Bestätigung
+ist eingebaut).
+
+Falls du es lieber Schritt für Schritt manuell machst, gehe weiter mit
+den Abschnitten unten.
+
+---
+
 ## 1. App-User im Loxone Config anlegen
 
 Erstelle einen separaten User für den Voice-Service, **nicht den
@@ -53,7 +86,7 @@ kann ein Angreifer nichts editieren, nur Geräte schalten.
 2. **API Keys** → **Create Key**, Limit setzen (z. B. $20/Monat).
 3. Key kopieren — wird nur einmal angezeigt.
 
-## 4. Raspberry Pi vorbereiten
+## 4. Manueller Setup (alternativ zum Schnellstart)
 
 Voraussetzung: Pi 4 oder 5, 64-bit Raspberry Pi OS, im selben LAN wie der
 Miniserver, SSH aktiv.
